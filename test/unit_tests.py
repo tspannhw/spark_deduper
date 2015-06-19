@@ -3,6 +3,7 @@ import unittest
 import datetime
 
 import deduper.utils as utils
+from deduper.settings import settings
 
 class DeduperTest(unittest.TestCase):
     def test_convert_dates(self):
@@ -78,6 +79,20 @@ class DeduperTest(unittest.TestCase):
         )
 
         assert d1_pred['NameFirst3FirstChars'] == 'azq'
+
+    def test_generate_pairs(self):
+        dict_list = [
+            {'ElevateSince': datetime.date(2014, 1, 27), 'City': None, 'ApptNumber': None, 'NameFirst': u'EJActegNHR', 'PNRCreateDate': datetime.date(2013, 8, 4), 'EmergencyPhoneNumber': None, 'NameFirst3FirstChars': u'eja', 'ElevateMember': u'1', 'TravelerOrigTerminal': u'ryGEuhvbNP', 'FrequentTravelerNbr': u'31949200969', 'ZipCode': None, 'PNRLocatorID': u'BGTJPD', 'EmergencyContactName': None, 'EMailAddress': u'LnCUrAhSmw', 'Address': u'aJxpyTrwqS', 'NameLast': u'obHGaFEtNQ', 'NameInAddr': None, 'PhoneNumber': u'5403578131'}, 
+            {'ElevateSince': datetime.date(2014, 1, 27), 'City': u'UlEgqaSwNp', 'ApptNumber': None, 'NameFirst': u'EJActegNHR', 'PNRCreateDate': datetime.date(2014, 11, 18), 'EmergencyPhoneNumber': None, 'NameFirst3FirstChars': u'eja', 'ElevateMember': u'1', 'TravelerOrigTerminal': u'ryGEuhvbNP', 'FrequentTravelerNbr': u'31949200969', 'ZipCode': None, 'PNRLocatorID': u'GHGNYF', 'EmergencyContactName': None, 'EMailAddress': u'LnCUrAhSmw', 'Address': None, 'NameLast': u'obHGaFEtNQ', 'NameInAddr': None, 'PhoneNumber': None}, 
+            {'ElevateSince': datetime.date(2014, 1, 27), 'City': u'UlEgqaSwNp City', 'ApptNumber': 'Suite 1', 'NameFirst': u'EJActegNHR Jr.', 'PNRCreateDate': datetime.date(2014, 10, 11), 'EmergencyPhoneNumber': None, 'NameFirst3FirstChars': u'eja', 'ElevateMember': u'1', 'TravelerOrigTerminal': u'San Francisco', 'FrequentTravelerNbr': u'31949200969', 'ZipCode': None, 'PNRLocatorID': u'AAAAAO', 'EmergencyContactName': None, 'EMailAddress': u'LnCUrAhSmw@gmail.com', 'Address': None, 'NameLast': u'obHGaFEtNQ Mr.', 'NameInAddr': None, 'PhoneNumber': None}
+        ]
+        predicate = 'eja'
+        list_of_pairs = utils.generate_pairs((predicate, dict_list))
+        # They all have the same FT number so they sould all have a True first value
+        assert all([p[0] == True for p in list_of_pairs])
+        # Thes second value should be a list of the same length as in settings DEDUPER_FIELDS
+        list_length = len(settings['DEDUPER_FIELDS'])
+        assert all([len(p[1]) == list_length for p in list_of_pairs])
 
 if __name__ == '__main__':
     unittest.main(argv=[sys.argv[0]])

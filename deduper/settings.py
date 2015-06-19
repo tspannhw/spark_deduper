@@ -17,5 +17,19 @@ settings = {
     'DATE_FIELDS' : [
         'ElevateSince',
         'PNRCreateDate',
-    ]
+    ],
+    'DEDUPER_FIELDS' : [
+        {'name' : 'NameFirst', 'type' : 'String'},
+        {'name' : 'NameLast', 'type' : 'String'},
+        {'name' : 'EMailAddress', 'type' : 'Exact'},
+        {'name' : 'PhoneNumber', 'type' : 'String'},
+        {'name' : 'EmergencyPhoneNumber', 'type' : 'String'},
+        {'name' : 'EmergencyContactName', 'type' : 'String'},
+        {'name' : 'NameInAddr', 'type' : 'String'},
+        {'name' : 'Address', 'type' : 'String'},
+        {'name' : 'ApptNumber', 'type' : 'String'},
+        {'name' : 'City', 'type' : 'String'},
+        {'name' : 'ZipCode', 'type' : 'String'},
+    ],
+    'DEDUPER_GROUND_TRUTH_FIELD' : 'FrequentTravelerNbr',
 }

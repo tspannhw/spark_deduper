@@ -1,7 +1,6 @@
 from datetime import datetime
-
-# Mllib
-from pyspark.mllib.regression import LabeledPoint
+import itertools
+import difflib
 
 from deduper.settings import settings
 
@@ -24,6 +23,33 @@ def add_predicate_key(data_dict, predicate_key_name, base_key, predicate_type, p
 
     return data_dict
 
-def generate_pairs(dict_list):
-    # TEST : IMPLEMENT ME
-    return [LabeledPoint(True, [1, 2, 3]), LabeledPoint(False, [4, 5, 6])]
+def compute_string_distance(s1, s2):
+    return difflib.SequenceMatcher(a=s1, b=s2).ratio()
+
+def generate_pairs(mapped_tuple):
+    # Unpack dict_list
+    predicate, dict_list = mapped_tuple
+
+    # Initiate the list of pairs to return
+    pairs = []
+    for d1, d2 in itertools.combinations(dict_list, 2):
+        # Find if it's a true match or not
+        assert d1[settings['DEDUPER_GROUND_TRUTH_FIELD']] is not None and d2[settings['DEDUPER_GROUND_TRUTH_FIELD']] is not None
+        match = d1[settings['DEDUPER_GROUND_TRUTH_FIELD']] == d2[settings['DEDUPER_GROUND_TRUTH_FIELD']]
+
+        # Find the distances
+        distances = []
+        for field in settings['DEDUPER_FIELDS']:
+            # If any of the 2 values is None, the distance is None (we'll convert into a SparseVector later.)
+            if d1[field['name']] is None or d2[field['name']] is None:
+                distances.append(None)
+            else:
+                if field['type'] == 'String':
+                    distances.append(compute_string_distance(str(d1[field['name']]), str(d2[field['name']])))
+                elif field['type'] == 'Exact':
+                    distances.append(1 if d1[field['name']] == d2[field['name']] else 0)
+
+        # Append to pairs
+        pairs.append((match, distances))
+
+    return pairs

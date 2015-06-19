@@ -1,4 +1,5 @@
 import os
+from operator import add
 
 # Spark!
 from pyspark import SparkContext
@@ -15,6 +16,7 @@ import utils
 
 # mllib
 from pyspark.mllib.regression import LabeledPoint, SparseVector
+from pyspark.mllib.classification import LogisticRegressionWithSGD
 
 def main():
     def _get_rdd(headers):
@@ -32,6 +34,38 @@ def main():
                 # Convert dates
                 .map(lambda x: utils.convert_dates(x))
         )
+
+    def _get_precision(results):
+        # results is an rdd of tuples of the form (true_value, predicted_value)
+        
+        # Precision: of all predicted matches, how many were real?
+
+        # Count all predicted matches
+        predicted_matches = results.filter(lambda x: x[1] == 1)
+        denominator = predicted_matches.count()
+
+        # Count how many of them are actually true
+        numerator = predicted_matches.map(lambda x: x[0]).reduce(add)
+
+        percentage = float(numerator)/denominator*100
+
+        return numerator, denominator, percentage
+
+    def _get_recall(results):
+        # results is an rdd of tuples of the form (true_value, predicted_value)
+
+        # Recall : Of all true matches, how many were retrieved?
+
+        # Count all true matches
+        true_matches = results.filter(lambda x: x[0] == 1)
+        denominator = true_matches.count()
+
+        # Count how many of them were retrieved
+        numerator = true_matches.map(lambda x: x[1]).reduce(add)
+
+        percentage = float(numerator)/denominator*100
+
+        return numerator, denominator, percentage
 
     # ********* MAIN ***************
 
@@ -69,10 +103,30 @@ def main():
             .map(lambda x: LabeledPoint(x[0], x[1]))
     )
 
-    print "size of data: %d" % data.count()
-    print "size of labeled_points: %d" % labeled_points.count()
-    for point in labeled_points.take(20):
-        print point
+    # Split test and train data
+    train_data, test_data = labeled_points.randomSplit([0.7, 0.3], seed=42)
+
+    # Train a logistic regression
+    logistic_regression = LogisticRegressionWithSGD.train(train_data)
+
+    # Build a rdd or tuples of the form: (true_label, predicted_label) for train and test data
+    train_results = train_data.map(lambda x: (x.label, logistic_regression.predict(x.features)))
+    test_results = test_data.map(lambda x: (x.label, logistic_regression.predict(x.features)))
+
+    # ******* Print results **************
+    print "\nResults when comparing intra-block pairs only:"
+
+    # Precision and recall on training data
+    numerator, denominator, percentage = _get_precision(train_results)
+    print "Precision on training data: %d/%d = %.2f%%" % (numerator, denominator, percentage)
+    numerator, denominator, percentage = _get_recall(train_results)
+    print "Recall on training data: %d/%d = %.2f%%" % (numerator, denominator, percentage)
+
+    # Precision and recall on test data
+    numerator, denominator, percentage = _get_precision(test_results)
+    print "Precision on test data: %d/%d = %.2f%%" % (numerator, denominator, percentage)
+    numerator, denominator, percentage = _get_recall(test_results)
+    print "Recall on test data: %d/%d = %.2f%%" % (numerator, denominator, percentage)
 
 if __name__ == '__main__':
     main()

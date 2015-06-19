@@ -51,5 +51,33 @@ class DeduperTest(unittest.TestCase):
         assert parsed_d2['ElevateSince'] == datetime.date(2012, 12, 12)
         assert parsed_d2['PNRCreateDate'] == None
 
+    def test_add_predicate_key(self):
+        d1 = {'ElevateSince': None,
+             'City': None,
+             'ApptNumber': None,
+             'NameLast': u'qreNBCkwnF',
+             'NameFirst': u'aZQlYFdhDS',
+             'PNRCreateDate': datetime.date(2013, 2, 20),
+             'EmergencyPhoneNumber': None,
+             'ElevateMember': u'0',
+             'TravelerOrigTerminal': u'jSbwXBFOCu',
+             'FrequentTravelerNbr': None,
+             'ZipCode': u'33934',
+             'EMailAddress': None,
+             'PNRLocatorID': u'AABXDA',
+             'PhoneNumber': None,
+             'Address': u'GCRtanMzuD',
+             'EmergencyContactName': None,
+             'NameInAddr': u'aZQlYFdhDS qreNBCkwnF',
+        }
+        d1_pred = utils.add_predicate_key(d1, 
+            predicate_key_name = 'NameFirst3FirstChars',
+            base_key = 'NameFirst',
+            predicate_type = 'FirstChars',
+            predicate_value = 3,
+        )
+
+        assert d1_pred['NameFirst3FirstChars'] == 'azq'
+
 if __name__ == '__main__':
     unittest.main(argv=[sys.argv[0]])

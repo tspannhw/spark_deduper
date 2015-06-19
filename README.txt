@@ -2,6 +2,8 @@
 
 ## Clone the repo.
 
+## Install Spark 1.3 o 1..4
+
 ## cd to the spark_deduper directory
 $ cd spark_deduper
 
@@ -16,5 +18,5 @@ $ python -m test.unit_tests
 
 # Integration test
 
-Use the standalone spark executable from the test dir to run the main script:
-$ test/spark-standalone/bin/spark-submit test/integration_test.py
+Run the integration test, which runs the main script
+$ spark-submit test/integration_test.py

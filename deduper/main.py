@@ -105,7 +105,11 @@ def main():
 
     # Split test and train data
     train_data, test_data = labeled_points.randomSplit([0.7, 0.3], seed=42)
-
+    print "Intra block training dataset is balanced? %d matches and %d non-matches."% (
+        train_data.filter(lambda x: x.label == 1).count(),
+        train_data.filter(lambda x: x.label == 0).count(),
+    )
+    
     # Train a logistic regression
     logistic_regression = LogisticRegressionWithSGD.train(train_data)
 

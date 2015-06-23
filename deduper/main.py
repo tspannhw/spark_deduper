@@ -1,5 +1,7 @@
 import os
+import random
 from operator import add
+from numpy import sqrt
 
 # Spark!
 from pyspark import SparkContext
@@ -18,6 +20,9 @@ import utils
 from pyspark.mllib.regression import LabeledPoint, SparseVector
 from pyspark.mllib.classification import LogisticRegressionWithSGD
 
+# Globlas
+N_PAIRS_TO_TEST = 100000 # Start value for generating random pairs with enough true matches
+
 def main():
     def _get_rdd(headers):
         return (
@@ -34,6 +39,24 @@ def main():
                 # Convert dates
                 .map(lambda x: utils.convert_dates(x))
         )
+
+    def _split_on_ground_thruth_field(data):
+        unique_field_values = data.map(lambda x: x[settings['DEDUPER_GROUND_TRUTH_FIELD']]).distinct()
+        train_values, test_values = unique_field_values.randomSplit([1 - settings['TEST_RELATIVE_SIZE'], settings['TEST_RELATIVE_SIZE']], seed=settings['RANDOM_SEED'])
+        train_data = (
+            train_values.map(lambda x: (x, None)).leftOuterJoin(
+                data.map(lambda x: (x[settings['DEDUPER_GROUND_TRUTH_FIELD']], x))
+            )
+            .map(lambda x: x[1][1])
+        )
+        test_data = (
+            test_values.map(lambda x: (x, None)).leftOuterJoin(
+                data.map(lambda x: (x[settings['DEDUPER_GROUND_TRUTH_FIELD']], x))
+            )
+            .map(lambda x: x[1][1])
+        )
+
+        return train_data, test_data
 
     def _get_precision(results):
         # results is an rdd of tuples of the form (true_value, predicted_value)
@@ -67,7 +90,21 @@ def main():
 
         return numerator, denominator, percentage
 
+    def _predict_extra_block_pair(labeled_point, same_block_bool, logistic_regression):
+        if not same_block_bool:
+            return 0
+        else:
+            return logistic_regression.predict(labeled_point.features)
+
+
     # ********* MAIN ***************
+
+    # Settings
+    if settings['RANDOM_SEED'] is None:
+        settings['RANDOM_SEED'] = random.randint(1, 100) 
+    # At some point, we will need the length of the distances vectors (features for ml) later while constructing the labeled points..
+    n_deduper_fields = len(settings['DEDUPER_FIELDS'])
+
 
     # Read the header line
     headers = utils.get_headers()
@@ -75,62 +112,111 @@ def main():
     # Get the data in an RDD
     data = _get_rdd(headers)
 
+    # Split labeled data and unlabeled data
+    labeled_data = data.filter(lambda x: x[settings['DEDUPER_GROUND_TRUTH_FIELD']] is not None)
+    unlabeled_data = data.filter(lambda x: x[settings['DEDUPER_GROUND_TRUTH_FIELD']] is None)
 
-    # We will need the length of the distances vectors (features for ml) later while constructing the labeled points..
-    list_length = len(settings['DEDUPER_FIELDS'])
+    # Split labeled data into a training and test datasets (on unique values of the DEDUPER_GROUND_TRUTH_FIELD such that all true pairs are together in their dataset)
+    train_data, test_data = _split_on_ground_thruth_field(labeled_data)
 
-    # Generate a new rdd with all intra-block pairs and the true value of whether or not they are matches (based on their FrequentTravelerNbr)
-    labeled_points = (
-        # Filter out those withtout a frequent traveler number
-        data.filter(lambda x: x[settings['DEDUPER_GROUND_TRUTH_FIELD']] is not None)
-            # Add a key for a predicate that takes the first 3 characeters of lastName
-            .map(lambda x: utils.add_predicate_key(x, 
-                predicate_key_name = 'NameFirst3FirstChars',
-                base_key = 'NameFirst',
-                predicate_type = 'FirstChars',
-                predicate_value = 3,
-                )
-            )
+    # Loop on all predicates that we want to try
+    for predicate_function in settings['PREDICATE_FUNCTIONS']:
+
+        print "\n***** Predicate function %s *************\n" % str(predicate_function)
+
+        # Add the predicate key to training and test_data
+        train_data = train_data.map(lambda x: utils.add_predicate_key(x, **predicate_function))
+        test_data = test_data.map(lambda x: utils.add_predicate_key(x, **predicate_function))
+
+        # Generate a new rdd with all intra-block pairs and the true value of whether or not they are matches (based on the ground thruth field)
+        train_pairs = (
             # Transform into tuples of the form (<key>, <value>) where key is the predicate and value is a list that will be extended with all elements of a block
-            .map(lambda x: (x['NameFirst3FirstChars'], [x]))
-            # Extend the list to get all dictionaries of a same block together
-            .reduceByKey(lambda l1, l2 : l1 + l2)
-            # Generate all pairs of records from each block
-            .flatMap(utils.generate_pairs)
-            # Convert list of distances into SparseVectors
-            .map(lambda x: (x[0], SparseVector(list_length, dict([(i, v) for i, v in enumerate(x[1]) if v is not None]))))
-            # Convert tuples into LabeledPoints
-            .map(lambda x: LabeledPoint(x[0], x[1]))
-    )
+            train_data.map(lambda x: (x['PredicateKey'], [x]))
+                # Extend the list to get all dictionaries of a same block together
+                .reduceByKey(lambda l1, l2 : l1 + l2)
+                # Generate all pairs of records from each block : (d1, d2)
+                .flatMap(utils.generate_pairs)
+                # Determine if the pair is a match and use this as a key -> (<match>, (d1, d2))
+                .map(lambda x: (utils.records_are_matches(x[0], x[1]), (x[0], x[1])))
+                # Convert dictionaries into a list of distance measures (one for each DEDUPER_FIELD) -. (<match>, [0.5, 1, ..])
+                .map(lambda x: (x[0], utils.dict_pair_2_distance_list(x[1][0], x[1][1])))
+                # Convert list of distances into SparseVectors -> (<match>, SparseVector)
+                .map(lambda x: (x[0], SparseVector(n_deduper_fields, dict([(i, v) for i, v in enumerate(x[1]) if v is not None]))))
+                # Convert tuples into LabeledPoints (LabeledPoint)
+                .map(lambda x: LabeledPoint(x[0], x[1]))
+        )
+        print "Intra block training dataset is balanced? %d matches and %d non-matches."% (
+            train_pairs.filter(lambda x: x.label == 1).count(),
+            train_pairs.filter(lambda x: x.label == 0).count(),
+        )
 
-    # Split test and train data
-    train_data, test_data = labeled_points.randomSplit([0.7, 0.3], seed=42)
-    print "Intra block training dataset is balanced? %d matches and %d non-matches."% (
-        train_data.filter(lambda x: x.label == 1).count(),
-        train_data.filter(lambda x: x.label == 0).count(),
-    )
-    
-    # Train a logistic regression
-    logistic_regression = LogisticRegressionWithSGD.train(train_data)
+        # Train a logistic regression
+        logistic_regression = LogisticRegressionWithSGD.train(train_pairs)
 
-    # Build a rdd or tuples of the form: (true_label, predicted_label) for train and test data
-    train_results = train_data.map(lambda x: (x.label, logistic_regression.predict(x.features)))
-    test_results = test_data.map(lambda x: (x.label, logistic_regression.predict(x.features)))
+        # ******* Training results **************
 
-    # ******* Print results **************
-    print "\nResults when comparing intra-block pairs only:"
+        print "\nResults when comparing training intra-block pairs only:"
+        # Build a rdd or tuples of the form: (true_label, predicted_label) for train and test data
+        train_results = train_pairs.map(lambda x: (x.label, logistic_regression.predict(x.features)))
+        # Precision and recall on training data
+        numerator, denominator, percentage = _get_precision(train_results)
+        print "Intra-block precision on training data: %d/%d = %.2f%%" % (numerator, denominator, percentage)
+        numerator, denominator, percentage = _get_recall(train_results)
+        print "Intra-block recall on training data: %d/%d = %.2f%%" % (numerator, denominator, percentage)
 
-    # Precision and recall on training data
-    numerator, denominator, percentage = _get_precision(train_results)
-    print "Precision on training data: %d/%d = %.2f%%" % (numerator, denominator, percentage)
-    numerator, denominator, percentage = _get_recall(train_results)
-    print "Recall on training data: %d/%d = %.2f%%" % (numerator, denominator, percentage)
+        # ******* Test results **************
 
-    # Precision and recall on test data
-    numerator, denominator, percentage = _get_precision(test_results)
-    print "Precision on test data: %d/%d = %.2f%%" % (numerator, denominator, percentage)
-    numerator, denominator, percentage = _get_recall(test_results)
-    print "Recall on test data: %d/%d = %.2f%%" % (numerator, denominator, percentage)
+        # Generate random pairs instead of intra-block pairs until the number of true matches is big enough
+        n_true_matches_in_test_pairs = 0
+        curr_n_pairs_in_test = 0
+        fraction = 0
+        while n_true_matches_in_test_pairs < settings['MIN_TRUE_MATCHES_FOR_RECALL_CALCULATION'] and fraction < 0.5:
+            print "\nGenerating a random set of pairs for testing the model...\n"
+            # Taking 2 samples whose size is the square root of the number of pairs we want and then excluding same-record pairs will give us a random sample of pairs of approximately the right size
+            curr_n_pairs_in_test += N_PAIRS_TO_TEST
+            fraction = float(sqrt(curr_n_pairs_in_test))/test_data.count()
+            random_test_pairs = (
+                test_data.sample(False, fraction, seed=settings['RANDOM_SEED'])
+                    .map(lambda x: (True, x))
+                    .join(
+                        test_data
+                        .sample(False, fraction, seed=settings['RANDOM_SEED'])
+                        .map(lambda x: (True, x))
+                    )
+                .filter(lambda x: x[1][0] != x[1][1])
+                # Only keep the tuple of 2 dictionaries
+                .map(lambda x: x[1])
+                # Determine if the pair is a match and use this as a key -> (<match>, (d1, d2))
+                .map(lambda x: (utils.records_are_matches(x[0], x[1]), x))
+                # Convert dictionaries into a list of distance measures (one for each DEDUPER_FIELD) -. (<match>, [0.5, 1, ..], (d1, d2))
+                .map(lambda x: (x[0], utils.dict_pair_2_distance_list(x[1][0], x[1][1]), x[1]))
+                # Convert list of distances into SparseVectors -> (<match>, SparseVector, (d1, d2))
+                .map(lambda x: (x[0], SparseVector(n_deduper_fields, dict([(i, v) for i, v in enumerate(x[1]) if v is not None])), x[2]))
+                # Convert tuples into LabeledPoints ->  (LabeledPoint, (d1, d2))
+                .map(lambda x: (LabeledPoint(x[0], x[1]), x[2]))
+                # Determine if the pair is in the same block or not -> (LabeledPoint, <same_block>)
+                .map(lambda x: (x[0], utils.records_in_same_block(x[1][0], x[1][1])))
+            )
+            
+            n_true_matches_in_test_pairs = random_test_pairs.filter(lambda x: x[0].label == 1).count()
+
+        # Matches in random pairs will be very rare, make sure there are at least some of them..
+        print "Number of same block pairs: %d" % random_test_pairs.filter(lambda x: x[1]).count()
+        print "Number of true matches: %d" % n_true_matches_in_test_pairs
+        if n_true_matches_in_test_pairs == 0:
+            raise BaseException("Could not find enough true matches to test prediction and recall on labeled data.")
+
+        # Get results (<true_label>, <predicted_label>) for random_test_pairs
+        test_results = random_test_pairs.map(lambda x: (x[0].label, _predict_extra_block_pair(x[0], x[1], logistic_regression)))
+        
+        # Precision and recall on test data
+        numerator, denominator, percentage = _get_precision(test_results)
+        print "Precision on test data (intra and extra block pairs): %d/%d = %.2f%%" % (numerator, denominator, percentage)
+        numerator, denominator, percentage = _get_recall(test_results)
+        print "Recall on test data (intra and extra block pairs): %d/%d = %.2f%%" % (numerator, denominator, percentage)
+
+        print "\n\n"
+
 
 if __name__ == '__main__':
     main()

@@ -7,6 +7,7 @@ settings = {
     # ***** Parsing **********
     'LOCAL_DATA_PATH' : '../test_data/fake_passengers40000.txt',
     'HEADER_LOCAL_DATA_PATH' : '../test_data/fake_passengers40000.header',
+    'LOG_FILE_PATH' : 'log/deduper_log.txt',
     'SEPARATOR' : '\t',
     'DATE_FIELDS' : [
         'ElevateSince',

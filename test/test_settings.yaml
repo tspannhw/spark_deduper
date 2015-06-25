@@ -1,0 +1,41 @@
+# Parsing
+LOCAL_DATA_PATH: ../test_data/fake_passengers40000.txt
+HEADER_LOCAL_DATA_PATH: ../test_data/fake_passengers40000.header
+LOG_FILE_PATH: log/deduper_log.txt
+SEPARATOR: "\t"
+
+# Deduper
+DEDUPER_FIELDS:  # Those fields will be used in the model
+# Type can be one of 'String' or 'Exact'.  Fields defined as String will be compared using difflib.SequenceMatcher while fields defined as Exact will be compared on whether or not they have an identical value
+- name: NameFirst
+  type: String
+- name: NameLast
+  type: String
+- name: EMailAddress
+  type: Exact
+- name: PhoneNumber
+  type: String
+- name: EmergencyPhoneNumber
+  type: String
+- name: EmergencyContactName
+  type: String
+- name: NameInAddr
+  type: String
+- name: Address
+  type: String
+- name: ApptNumber
+  type: String
+- name: City
+  type: String
+- name: ZipCode
+  type: String
+DEDUPER_GROUND_TRUTH_FIELD: FrequentTravelerNbr
+
+# Model
+TEST_RELATIVE_SIZE: 0.3
+RANDOM_SEED: 42 # Write nothing to get a truly random seed
+PREDICATE_FUNCTIONS:
+- base_key: NameFirst
+  predicate_type: FirstChars
+  predicate_value: 3
+MIN_TRUE_MATCHES_FOR_EVALUATION: 20

@@ -1,19 +1,21 @@
+
 import os
+import argparse
+import yaml
 import random
 from operator import add
 from numpy import sqrt
+
 
 # Spark!
 from pyspark import SparkContext
 # Set the absolute path of the py-files to use (relative paths don't work..)
 pyFiles = [os.path.join(os.path.abspath('.'), f_name) for f_name in [
-    "deduper/settings.py",
     "deduper/utils.py",
 ]]
 sc = SparkContext("local", "Virgin Deduper", pyFiles=pyFiles)
 
 # Import from pyfiles
-from settings import settings
 import utils
 
 # mllib
@@ -22,14 +24,39 @@ from pyspark.mllib.classification import LogisticRegressionWithSGD
 
 # Globlas
 N_PAIRS_TO_TEST = 100000 # Start value for generating random pairs with enough true matches
+DEFAULT_SETTINGS_FILE = 'conf/settings.yaml'
 
-def log_line(line):
+def log_line(line, log_file):
     print line
-    with open(settings['LOG_FILE_PATH'], 'a') as f:
+    with open(log_file, 'a') as f:
         f.writelines(line + '\n')
 
+def parse_arguments():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-s', '--settings_file', type=str, help="Path of the yaml file with settings", required=False)
+    ARGS = parser.parse_args()
 
-def main():
+    return ARGS
+
+def get_settings(ARGS):
+    # Settings provided with the -s argument
+    if ARGS.settings_file is not None:
+        if os.path.isfile(ARGS.settings_file):
+            with open(ARGS.settings_file, 'r') as f:
+                settings = yaml.load(f)
+        else:
+            raise BaseException("The settings file provided as argument does not exist (%s)" % ARGS.settings_file)
+    # Default settings
+    else:
+        if os.path.isfile(DEFAULT_SETTINGS_FILE):
+            with open(DEFAULT_SETTINGS_FILE, 'r') as f:
+                settings = yaml.load(f)
+        else:
+            raise BaseException("The default settings file does not exist (%s)" % DEFAULT_SETTINGS_FILE)
+
+    return settings
+
+def main(settings):
     def _get_rdd(headers):
         return (
             # Read the data
@@ -42,8 +69,6 @@ def main():
                 .map(lambda x: [v if v != 'NULL' else None for v in x])
                 # Zip into a dictionary with headers
                 .map(lambda x: dict(zip(headers, x)))
-                # Convert dates
-                .map(lambda x: utils.convert_dates(x))
         )
 
     def _split_on_ground_thruth_field(data):
@@ -104,34 +129,34 @@ def main():
 
 
     # ********* MAIN ***************
+    # Sanity check on settings
+    utils.settings_sanity_check(settings)
+    log_file = settings['LOG_FILE_PATH']
 
-    # Settings
-    if settings['RANDOM_SEED'] is None:
-        settings['RANDOM_SEED'] = random.randint(1, 100) 
     # At some point, we will need the length of the distances vectors (features for ml) later while constructing the labeled points..
     n_deduper_fields = len(settings['DEDUPER_FIELDS'])
 
 
     # Read the header line
-    headers = utils.get_headers()
+    headers = utils.get_headers(settings['HEADER_LOCAL_DATA_PATH'], settings['SEPARATOR'])
 
     # Get the data in an RDD
     data = _get_rdd(headers)
-    log_line("The whole dataset contains %d records" % data.count())
+    log_line("The whole dataset contains %d records" % data.count(), log_file)
 
     # Split labeled data and unlabeled data
     labeled_data = data.filter(lambda x: x[settings['DEDUPER_GROUND_TRUTH_FIELD']] is not None)
     unlabeled_data = data.filter(lambda x: x[settings['DEDUPER_GROUND_TRUTH_FIELD']] is None)
-    log_line("%d records are labeled and %d records are unlabeld"% (labeled_data.count(), unlabeled_data.count()))
+    log_line("%d records are labeled and %d records are unlabeld"% (labeled_data.count(), unlabeled_data.count()), log_file)
 
     # Split labeled data into a training and test datasets (on unique values of the DEDUPER_GROUND_TRUTH_FIELD such that all true pairs are together in their dataset)
     train_data, test_data = _split_on_ground_thruth_field(labeled_data)
-    log_line("Labeled data was split into %d records for training and %d records for testing" % (train_data.count(), test_data.count()))
+    log_line("Labeled data was split into %d records for training and %d records for testing" % (train_data.count(), test_data.count()), log_file)
 
     # Loop on all predicates that we want to try
     for predicate_function in settings['PREDICATE_FUNCTIONS']:
 
-        log_line("\n***** Predicate function %s *************\n" % str(predicate_function))
+        log_line("\n***** Predicate function %s *************\n" % str(predicate_function), log_file)
 
         # Add the predicate key to training and test_data
         train_data = train_data.map(lambda x: utils.add_predicate_key(x, **predicate_function))
@@ -146,9 +171,9 @@ def main():
                 # Generate all pairs of records from each block : (d1, d2)
                 .flatMap(utils.generate_pairs)
                 # Determine if the pair is a match and use this as a key -> (<match>, (d1, d2))
-                .map(lambda x: (utils.records_are_matches(x[0], x[1]), (x[0], x[1])))
+                .map(lambda x: (utils.records_are_matches(x[0], x[1], settings['DEDUPER_GROUND_TRUTH_FIELD']), (x[0], x[1])))
                 # Convert dictionaries into a list of distance measures (one for each DEDUPER_FIELD) -. (<match>, [0.5, 1, ..])
-                .map(lambda x: (x[0], utils.dict_pair_2_distance_list(x[1][0], x[1][1])))
+                .map(lambda x: (x[0], utils.dict_pair_2_distance_list(x[1][0], x[1][1], settings['DEDUPER_FIELDS'])))
                 # Convert list of distances into SparseVectors -> (<match>, SparseVector)
                 .map(lambda x: (x[0], SparseVector(n_deduper_fields, dict([(i, v) for i, v in enumerate(x[1]) if v is not None]))))
                 # Convert tuples into LabeledPoints (LabeledPoint)
@@ -156,11 +181,11 @@ def main():
         )
         n_true_matches = train_pairs.filter(lambda x: x.label == 1).count()
         n_true_no_match = train_pairs.filter(lambda x: x.label == 0).count()
-        log_line("When taking all intra-block pairs, we get %d true matches and %d true no-match" % (n_true_matches, n_true_no_match))
+        log_line("When taking all intra-block pairs, we get %d true matches and %d true no-match" % (n_true_matches, n_true_no_match), log_file)
         ratio = float(n_true_matches)/n_true_no_match
         # If the ratio is too unbalanced, balance it
         if ratio < 0.85 or ratio > 1.15:
-            log_line("Intra-block pairs are too unbalanced, we will sample the biggest set to get approximately the same number of each type")
+            log_line("Intra-block pairs are too unbalanced, we will sample the biggest set to get approximately the same number of each type", log_file)
             label_with_too_many = 0 if n_true_no_match > n_true_matches else 1
             keep_all_label = 0 if label_with_too_many == 1 else 1
             train_pairs = (
@@ -174,24 +199,24 @@ def main():
             )
             n_true_matches = train_pairs.filter(lambda x: x.label == 1).count()
             n_true_no_match = train_pairs.filter(lambda x: x.label == 0).count()
-            log_line("After sampling, intra-block pairs, we get %d true matches and %d true no-match" % (n_true_matches, n_true_no_match))
+            log_line("After sampling, intra-block pairs, we get %d true matches and %d true no-match" % (n_true_matches, n_true_no_match), log_file)
         else:
-            log_line("These intra-block pairs are balanced enough so we will keep all of them")
+            log_line("These intra-block pairs are balanced enough so we will keep all of them", log_file)
         
         # Train a logistic regression
-        log_line("Training a logistic regression...")
+        log_line("Training a logistic regression...", log_file)
         logistic_regression = LogisticRegressionWithSGD.train(train_pairs)
 
         # ******* Training results **************
 
-        log_line("\nResults when comparing training intra-block pairs only:")
+        log_line("\nResults when comparing training intra-block pairs only:", log_file)
         # Build a rdd or tuples of the form: (true_label, predicted_label) for train and test data
         train_results = train_pairs.map(lambda x: (x.label, logistic_regression.predict(x.features)))
         # Precision and recall on training data
         numerator, denominator, percentage = _get_precision(train_results)
-        log_line("Intra-block precision on training data: %d/%d = %.2f%%" % (numerator, denominator, percentage))
+        log_line("Intra-block precision on training data: %d/%d = %.2f%%" % (numerator, denominator, percentage), log_file)
         numerator, denominator, percentage = _get_recall(train_results)
-        log_line("Intra-block recall on training data: %d/%d = %.2f%%" % (numerator, denominator, percentage))
+        log_line("Intra-block recall on training data: %d/%d = %.2f%%" % (numerator, denominator, percentage), log_file)
 
         # ******* Test results **************
 
@@ -199,8 +224,8 @@ def main():
         n_true_matches_in_test_pairs = 0
         curr_n_pairs_in_test = 0
         fraction = 0
-        while n_true_matches_in_test_pairs < settings['MIN_TRUE_MATCHES_FOR_RECALL_CALCULATION'] and fraction < 0.5:
-            log_line("\nGenerating a random set of pairs for testing the model...\n")
+        while n_true_matches_in_test_pairs < settings['MIN_TRUE_MATCHES_FOR_EVALUATION'] and fraction < 0.5:
+            log_line("\nGenerating a random set of pairs for testing the model...\n", log_file)
             # Taking 2 samples whose size is the square root of the number of pairs we want and then excluding same-record pairs will give us a random sample of pairs of approximately the right size
             curr_n_pairs_in_test += N_PAIRS_TO_TEST
             fraction = float(sqrt(curr_n_pairs_in_test))/test_data.count()
@@ -216,9 +241,9 @@ def main():
                 # Only keep the tuple of 2 dictionaries
                 .map(lambda x: x[1])
                 # Determine if the pair is a match and use this as a key -> (<match>, (d1, d2))
-                .map(lambda x: (utils.records_are_matches(x[0], x[1]), x))
+                .map(lambda x: (utils.records_are_matches(x[0], x[1], settings['DEDUPER_GROUND_TRUTH_FIELD']), x))
                 # Convert dictionaries into a list of distance measures (one for each DEDUPER_FIELD) -. (<match>, [0.5, 1, ..], (d1, d2))
-                .map(lambda x: (x[0], utils.dict_pair_2_distance_list(x[1][0], x[1][1]), x[1]))
+                .map(lambda x: (x[0], utils.dict_pair_2_distance_list(x[1][0], x[1][1], settings['DEDUPER_FIELDS']), x[1]))
                 # Convert list of distances into SparseVectors -> (<match>, SparseVector, (d1, d2))
                 .map(lambda x: (x[0], SparseVector(n_deduper_fields, dict([(i, v) for i, v in enumerate(x[1]) if v is not None])), x[2]))
                 # Convert tuples into LabeledPoints ->  (LabeledPoint, (d1, d2))
@@ -230,8 +255,8 @@ def main():
             n_true_matches_in_test_pairs = random_test_pairs.filter(lambda x: x[0].label == 1).count()
 
         # Matches in random pairs will be very rare, make sure there are at least some of them..
-        log_line("Number of same block pairs in the test set: %d" % random_test_pairs.filter(lambda x: x[1]).count())
-        log_line("Number of true matches in the test set: %d" % n_true_matches_in_test_pairs)
+        log_line("Number of same block pairs in the test set: %d" % random_test_pairs.filter(lambda x: x[1]).count(), log_file)
+        log_line("Number of true matches in the test set: %d" % n_true_matches_in_test_pairs, log_file)
         if n_true_matches_in_test_pairs == 0:
             raise BaseException("Could not find enough true matches to test prediction and recall on labeled data.")
 
@@ -239,13 +264,15 @@ def main():
         test_results = random_test_pairs.map(lambda x: (x[0].label, _predict_extra_block_pair(x[0], x[1], logistic_regression)))
         
         # Precision and recall on test data
-        log_line("\nResults when comparing test pairs:")
+        log_line("\nResults when comparing test pairs:", log_file)
         numerator, denominator, percentage = _get_precision(test_results)
-        log_line("Precision on test data (intra and extra block pairs): %d/%d = %.2f%%" % (numerator, denominator, percentage))
+        log_line("Precision on test data (intra and extra block pairs): %d/%d = %.2f%%" % (numerator, denominator, percentage), log_file)
         numerator, denominator, percentage = _get_recall(test_results)
-        log_line("Recall on test data (intra and extra block pairs): %d/%d = %.2f%%" % (numerator, denominator, percentage))
-        log_line("\n\n")
+        log_line("Recall on test data (intra and extra block pairs): %d/%d = %.2f%%" % (numerator, denominator, percentage), log_file)
+        log_line("\n\n", log_file)
 
 
 if __name__ == '__main__':
-    main()
+    ARGS = parse_arguments()
+    settings = get_settings(ARGS)
+    main(settings)

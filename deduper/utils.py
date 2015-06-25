@@ -1,17 +1,24 @@
-from datetime import datetime
+import os
+import random
 import itertools
 import difflib
 
-from deduper.settings import settings
+def settings_sanity_check(settings):
+    # Fill missing values
+    if settings['RANDOM_SEED'] is None:
+        settings['RANDOM_SEED'] = random.randint(1, 100) 
 
-def get_headers():
-    with open(settings['HEADER_LOCAL_DATA_PATH'], 'r') as f:
+    # Sanity check
+    assert os.path.isfile(settings['LOCAL_DATA_PATH'])
+    assert os.path.isfile(settings['HEADER_LOCAL_DATA_PATH'])
+    assert all([p['predicate_type'] in ['FirstChars'] for p in settings['PREDICATE_FUNCTIONS']])
+    assert all([f_name != 'PredicateKey' for f_name in [f['name'] for f in settings['DEDUPER_FIELDS']] + [settings['DEDUPER_GROUND_TRUTH_FIELD']]])
+
+def get_headers(file_path, separator):
+    with open(file_path, 'r') as f:
         header_line = f.readlines()[0]
-    headers = header_line[:-1].split(settings['SEPARATOR'])
+    headers = header_line[:-1].split(separator)
     return headers
-
-def convert_dates(line_dict):
-    return dict([(k, v) if k not in settings['DATE_FIELDS'] or v == None else (k, datetime.strptime(v, "%Y-%m-%d").date()) for k, v in line_dict.items()])
 
 def add_predicate_key(data_dict, base_key, predicate_type, predicate_value, predicate_key_name='PredicateKey'):
     if predicate_type == 'FirstChars':
@@ -22,16 +29,16 @@ def add_predicate_key(data_dict, base_key, predicate_type, predicate_value, pred
 def compute_string_distance(s1, s2):
     return difflib.SequenceMatcher(a=s1, b=s2).ratio()
 
-def records_are_matches(d1, d2):
+def records_are_matches(d1, d2, ground_truth_field_name):
     # Find if it's a true match or not
-    assert d1[settings['DEDUPER_GROUND_TRUTH_FIELD']] is not None and d2[settings['DEDUPER_GROUND_TRUTH_FIELD']] is not None
-    return d1[settings['DEDUPER_GROUND_TRUTH_FIELD']] == d2[settings['DEDUPER_GROUND_TRUTH_FIELD']]
+    assert d1[ground_truth_field_name] is not None and d2[ground_truth_field_name] is not None
+    return d1[ground_truth_field_name] == d2[ground_truth_field_name]
 
-def dict_pair_2_distance_list(d1, d2):
+def dict_pair_2_distance_list(d1, d2, deduper_fields):
 
     # Find the distances
     distances = []
-    for field in settings['DEDUPER_FIELDS']:
+    for field in deduper_fields:
         # If any of the 2 values is None, the distance is None (we'll convert into a SparseVector later.)
         if d1[field['name']] is None or d2[field['name']] is None:
             distances.append(None)

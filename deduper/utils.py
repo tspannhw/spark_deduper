@@ -8,10 +8,17 @@ def settings_sanity_check(settings):
     if settings['RANDOM_SEED'] is None:
         settings['RANDOM_SEED'] = random.randint(1, 100) 
 
-    # Sanity check
+    # Make sure the data and header files exist
     assert os.path.isfile(settings['LOCAL_DATA_PATH'])
     assert os.path.isfile(settings['HEADER_LOCAL_DATA_PATH'])
+
+    # Make sure the deduper fields types have valid values (only String and Exact so far)
+    assert all([f['type'] in ['String', 'Exact'] for f in settings['DEDUPER_FIELDS']])
+
+    # Make sure the predicate functions are of supported types (only FirstChars so far)
     assert all([p['predicate_type'] in ['FirstChars'] for p in settings['PREDICATE_FUNCTIONS']])
+
+    # Make sure no original field is named PredicateKey because we'll use this name to store the predicate (FIXME..?)
     assert all([f_name != 'PredicateKey' for f_name in [f['name'] for f in settings['DEDUPER_FIELDS']] + [settings['DEDUPER_GROUND_TRUTH_FIELD']]])
 
 def get_headers(file_path, separator):

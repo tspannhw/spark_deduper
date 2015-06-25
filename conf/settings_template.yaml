@@ -19,9 +19,12 @@ DEDUPER_GROUND_TRUTH_FIELD: PersonID
 
 # Model
 TEST_RELATIVE_SIZE: 0.3
-RANDOM_SEED: 42 # Set to None for a truly random seed
+RANDOM_SEED: 42 # Leave blank for a truly random seed
 PREDICATE_FUNCTIONS:
 - base_key: NameFirst
   predicate_type: FirstChars
   predicate_value: 3
+- base_key: NameLast
+  predicate_type: FirstChars
+  predicate_value: 2
 MIN_TRUE_MATCHES_FOR_EVALUATION: 20

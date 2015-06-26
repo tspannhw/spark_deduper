@@ -1,4 +1,3 @@
-
 import os
 import argparse
 import yaml
@@ -13,7 +12,7 @@ from pyspark import SparkContext
 pyFiles = [os.path.join(os.path.abspath('.'), f_name) for f_name in [
     "deduper/utils.py",
 ]]
-sc = SparkContext("local", "Virgin Deduper", pyFiles=pyFiles)
+sc = SparkContext("local", "Spark Deduper", pyFiles=pyFiles)
 
 # Import from pyfiles
 import utils

@@ -8,6 +8,11 @@ def settings_sanity_check(settings):
     if settings['RANDOM_SEED'] is None:
         settings['RANDOM_SEED'] = random.randint(1, 100) 
 
+    # Create a directory for the log file
+    log_directory = os.path.split(settings['LOG_FILE_PATH'])[0]
+    if not os.path.isdir(log_directory):
+        os.makedirs(log_directory) 
+
     # Make sure the data and header files exist
     assert os.path.isfile(settings['LOCAL_DATA_PATH'])
     assert os.path.isfile(settings['HEADER_LOCAL_DATA_PATH'])
